@@ -2,6 +2,7 @@ package com.xiaoriyue.gpscamera
 
 import android.Manifest
 import android.content.ContentValues
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -18,6 +19,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.util.Log
+import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -57,7 +59,7 @@ class MainActivity : AppCompatActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val timeFormat = SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.TAIWAN)
 
-    // 每秒更新一次畫面上顯示的時間
+    // 每秒更新一次畫面上顯示的時間 / 疊字內容
     private val clockTicker = object : Runnable {
         override fun run() {
             updateOverlayText()
@@ -99,14 +101,24 @@ class MainActivity : AppCompatActivity() {
 
         previewView = findViewById(R.id.previewView)
         gpsOverlayText = findViewById(R.id.gpsOverlayText)
-        val captureButton = findViewById<android.widget.Button>(R.id.captureButton)
+        val captureButton = findViewById<Button>(R.id.captureButton)
+        val settingsButton = findViewById<Button>(R.id.settingsButton)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
         captureButton.setOnClickListener { takePhoto() }
+        settingsButton.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
 
         requestNeededPermissions()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 從設定頁返回時，即時反映最新的自訂文字／經緯度顯示設定
+        updateOverlayText()
     }
 
     private fun requestNeededPermissions() {
@@ -193,9 +205,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 組合即時疊字內容：地址／經緯度（可選）／自訂文字（可選）／時間 */
     private fun updateOverlayText() {
         val now = timeFormat.format(Date())
-        gpsOverlayText.text = "$lastAddress\n$now"
+        val lines = mutableListOf(lastAddress)
+
+        if (Prefs.getShowLatLon(this)) {
+            lastLocation?.let {
+                lines.add("%.6f, %.6f".format(it.latitude, it.longitude))
+            }
+        }
+
+        val customText = Prefs.getCustomText(this)
+        if (customText.isNotBlank()) {
+            lines.add(customText)
+        }
+
+        lines.add(now)
+        gpsOverlayText.text = lines.joinToString("\n")
     }
 
     // ---------- 拍照 ----------
@@ -203,13 +230,37 @@ class MainActivity : AppCompatActivity() {
     private fun takePhoto() {
         val capture = imageCapture ?: return
 
+        // 以按下快門當下的定位／時間／設定為準，確保畫面與存檔一致
+        val captureLocation = lastLocation
+        val captureAddress = lastAddress
+        val captureTime = timeFormat.format(Date())
+        val captureCustomText = Prefs.getCustomText(this)
+        val captureShowLatLon = Prefs.getShowLatLon(this)
+
         capture.takePicture(cameraExecutor, object : ImageCapture.OnImageCapturedCallback() {
             override fun onCaptureSuccess(image: ImageProxy) {
                 val bitmap = imageProxyToBitmap(image)
                 image.close()
 
-                val watermarked = drawGpsWatermark(bitmap, lastAddress, timeFormat.format(Date()))
+                val watermarked = drawGpsWatermark(
+                    source = bitmap,
+                    address = captureAddress,
+                    time = captureTime,
+                    location = captureLocation,
+                    showLatLon = captureShowLatLon,
+                    customText = captureCustomText
+                )
                 saveBitmapToGallery(watermarked)
+
+                if (captureLocation != null) {
+                    LocationLogger.append(
+                        this@MainActivity,
+                        captureTime,
+                        captureLocation.latitude,
+                        captureLocation.longitude,
+                        captureAddress
+                    )
+                }
             }
 
             override fun onError(exception: ImageCaptureException) {
@@ -234,8 +285,15 @@ class MainActivity : AppCompatActivity() {
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
-    /** 將 GPS 地址與時間畫在照片右下角，回傳新的 Bitmap */
-    private fun drawGpsWatermark(source: Bitmap, address: String, time: String): Bitmap {
+    /** 將地址／經緯度／自訂文字／時間畫在照片右下角，回傳新的 Bitmap */
+    private fun drawGpsWatermark(
+        source: Bitmap,
+        address: String,
+        time: String,
+        location: Location?,
+        showLatLon: Boolean,
+        customText: String
+    ): Bitmap {
         val result = source.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(result)
 
@@ -250,8 +308,18 @@ class MainActivity : AppCompatActivity() {
             textAlign = Paint.Align.RIGHT
         }
 
-        val lines = wrapAddress(address, textPaint, result.width - padding * 2)
-        val allLines = lines + time
+        val addressLines = wrapAddress(address, textPaint, result.width - padding * 2)
+
+        val allLines = mutableListOf<String>().apply {
+            addAll(addressLines)
+            if (showLatLon && location != null) {
+                add("%.6f, %.6f".format(location.latitude, location.longitude))
+            }
+            if (customText.isNotBlank()) {
+                add(customText)
+            }
+            add(time)
+        }
 
         val lineHeight = textSize * 1.3f
         val blockHeight = lineHeight * allLines.size
