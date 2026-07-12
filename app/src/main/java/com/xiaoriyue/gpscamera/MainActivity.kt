@@ -20,15 +20,24 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.util.Log
 import android.widget.Button
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.MediaStoreOutputOptions
+import androidx.camera.video.Quality
+import androidx.camera.video.QualitySelector
+import androidx.camera.video.Recorder
+import androidx.camera.video.Recording
+import androidx.camera.video.VideoCapture
+import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -48,8 +57,17 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var previewView: PreviewView
     private lateinit var gpsOverlayText: TextView
+    private lateinit var modeToggleButton: Button
+    private lateinit var captureButton: Button
+    private lateinit var brightnessSeekBar: SeekBar
 
     private var imageCapture: ImageCapture? = null
+    private var videoCapture: VideoCapture<Recorder>? = null
+    private var activeRecording: Recording? = null
+    private var camera: Camera? = null
+    private var isVideoMode = false
+    private var isRecording = false
+
     private lateinit var cameraExecutor: ExecutorService
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
@@ -101,23 +119,30 @@ class MainActivity : AppCompatActivity() {
 
         previewView = findViewById(R.id.previewView)
         gpsOverlayText = findViewById(R.id.gpsOverlayText)
-        val captureButton = findViewById<Button>(R.id.captureButton)
+        captureButton = findViewById(R.id.captureButton)
+        modeToggleButton = findViewById(R.id.modeToggleButton)
+        brightnessSeekBar = findViewById(R.id.brightnessSeekBar)
         val settingsButton = findViewById<Button>(R.id.settingsButton)
+        val galleryButton = findViewById<Button>(R.id.galleryButton)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
-        captureButton.setOnClickListener { takePhoto() }
+        captureButton.setOnClickListener { onCaptureButtonClicked() }
         settingsButton.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
+        galleryButton.setOnClickListener {
+            startActivity(Intent(this, GalleryActivity::class.java))
+        }
+        modeToggleButton.setOnClickListener { toggleMode() }
+        setupBrightnessSlider()
 
         requestNeededPermissions()
     }
 
     override fun onResume() {
         super.onResume()
-        // 從設定頁返回時，即時反映最新的自訂文字／經緯度顯示設定
         updateOverlayText()
     }
 
@@ -133,6 +158,11 @@ class MainActivity : AppCompatActivity() {
         ) {
             needed.add(Manifest.permission.ACCESS_FINE_LOCATION)
         }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            needed.add(Manifest.permission.RECORD_AUDIO)
+        }
 
         if (needed.isEmpty()) {
             startCamera()
@@ -142,31 +172,76 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- 模式切換（拍照／錄影） ----------
+
+    private fun toggleMode() {
+        if (isRecording) {
+            Toast.makeText(this, "請先停止錄影再切換模式", Toast.LENGTH_SHORT).show()
+            return
+        }
+        isVideoMode = !isVideoMode
+        modeToggleButton.text = if (isVideoMode) "模式：錄影" else "模式：拍照"
+        captureButton.text = if (isVideoMode) "開始錄影" else "拍照"
+        startCamera()
+    }
+
     // ---------- 相機 ----------
 
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
-
             val preview = Preview.Builder().build().also {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
-
-            imageCapture = ImageCapture.Builder()
-                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                .build()
-
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
             try {
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture)
+
+                camera = if (isVideoMode) {
+                    val recorder = Recorder.Builder()
+                        .setQualitySelector(QualitySelector.from(Quality.HD))
+                        .build()
+                    videoCapture = VideoCapture.withOutput(recorder)
+                    cameraProvider.bindToLifecycle(this, cameraSelector, preview, videoCapture)
+                } else {
+                    imageCapture = ImageCapture.Builder()
+                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                        .build()
+                    cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture)
+                }
+
+                applyBrightness(brightnessSeekBar.progress)
             } catch (e: Exception) {
                 Log.e(TAG, "相機綁定失敗", e)
                 Toast.makeText(this, "相機啟動失敗：${e.message}", Toast.LENGTH_LONG).show()
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    // ---------- 亮度（曝光補償）調整 ----------
+
+    private fun setupBrightnessSlider() {
+        brightnessSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) applyBrightness(progress)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+    }
+
+    /** progress: 0~100，對應相機支援的曝光補償範圍（50 為預設中間值） */
+    private fun applyBrightness(progress: Int) {
+        val cam = camera ?: return
+        val range = cam.cameraInfo.exposureState.exposureCompensationRange
+        if (range.lower == 0 && range.upper == 0) return // 裝置不支援曝光調整
+
+        val ratio = progress / 100f
+        val index = (range.lower + (range.upper - range.lower) * ratio).toInt()
+            .coerceIn(range.lower, range.upper)
+        cam.cameraControl.setExposureCompensationIndex(index)
     }
 
     // ---------- 定位 ----------
@@ -225,12 +300,21 @@ class MainActivity : AppCompatActivity() {
         gpsOverlayText.text = lines.joinToString("\n")
     }
 
+    // ---------- 拍照 / 錄影按鈕統一入口 ----------
+
+    private fun onCaptureButtonClicked() {
+        if (isVideoMode) {
+            if (isRecording) stopRecording() else startRecording()
+        } else {
+            takePhoto()
+        }
+    }
+
     // ---------- 拍照 ----------
 
     private fun takePhoto() {
         val capture = imageCapture ?: return
 
-        // 以按下快門當下的定位／時間／設定為準，確保畫面與存檔一致
         val captureLocation = lastLocation
         val captureAddress = lastAddress
         val captureTime = timeFormat.format(Date())
@@ -255,7 +339,7 @@ class MainActivity : AppCompatActivity() {
                 if (captureLocation != null) {
                     LocationLogger.append(
                         this@MainActivity,
-                        captureTime,
+                        "[照片] $captureTime",
                         captureLocation.latitude,
                         captureLocation.longitude,
                         captureAddress
@@ -324,7 +408,6 @@ class MainActivity : AppCompatActivity() {
         val lineHeight = textSize * 1.3f
         val blockHeight = lineHeight * allLines.size
 
-        // 半透明底色，讓文字更清楚
         val bgPaint = Paint().apply {
             color = Color.argb(140, 0, 0, 0)
         }
@@ -345,7 +428,6 @@ class MainActivity : AppCompatActivity() {
         return result
     }
 
-    /** 簡單依畫面寬度換行，避免地址過長被裁切 */
     private fun wrapAddress(address: String, paint: Paint, maxWidth: Float): List<String> {
         if (paint.measureText(address) <= maxWidth) return listOf(address)
 
@@ -398,10 +480,82 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- 錄影 ----------
+
+    private fun startRecording() {
+        val capture = videoCapture ?: return
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            Toast.makeText(this, "需要麥克風權限才能錄影", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val filename = "GPS_${System.currentTimeMillis()}.mp4"
+        val contentValues = ContentValues().apply {
+            put(MediaStore.Video.Media.DISPLAY_NAME, filename)
+            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/GpsCamera")
+            }
+        }
+
+        val outputOptions = MediaStoreOutputOptions.Builder(
+            contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        ).setContentValues(contentValues).build()
+
+        val startLocation = lastLocation
+        val startAddress = lastAddress
+        val startTime = timeFormat.format(Date())
+
+        activeRecording = capture.output
+            .prepareRecording(this, outputOptions)
+            .withAudioEnabled()
+            .start(ContextCompat.getMainExecutor(this)) { event ->
+                when (event) {
+                    is VideoRecordEvent.Start -> {
+                        isRecording = true
+                        captureButton.text = "停止錄影"
+                        if (startLocation != null) {
+                            LocationLogger.append(
+                                this, "[影片開始] $startTime",
+                                startLocation.latitude, startLocation.longitude, startAddress
+                            )
+                        }
+                        Toast.makeText(this, "開始錄影", Toast.LENGTH_SHORT).show()
+                    }
+                    is VideoRecordEvent.Finalize -> {
+                        isRecording = false
+                        captureButton.text = "開始錄影"
+                        if (event.hasError()) {
+                            Toast.makeText(this, "錄影發生錯誤：${event.error}", Toast.LENGTH_LONG).show()
+                        } else {
+                            val endTime = timeFormat.format(Date())
+                            val endLocation = lastLocation
+                            if (endLocation != null) {
+                                LocationLogger.append(
+                                    this, "[影片結束] $endTime",
+                                    endLocation.latitude, endLocation.longitude, lastAddress
+                                )
+                            }
+                            Toast.makeText(this, "影片已儲存至相簿", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    else -> Unit
+                }
+            }
+    }
+
+    private fun stopRecording() {
+        activeRecording?.stop()
+        activeRecording = null
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         mainHandler.removeCallbacks(clockTicker)
         fusedLocationClient.removeLocationUpdates(locationCallback)
+        activeRecording?.stop()
         cameraExecutor.shutdown()
     }
 

@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
@@ -27,6 +28,12 @@
             android:name=".SettingsActivity"
             android:exported="false"
             android:label="設定"
+            android:screenOrientation="portrait" />
+
+        <activity
+            android:name=".GalleryActivity"
+            android:exported="false"
+            android:label="相簿"
             android:screenOrientation="portrait" />
     </application>
 
