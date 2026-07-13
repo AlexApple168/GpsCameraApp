@@ -53,6 +53,24 @@
         android:layout_marginStart="16dp"
         android:text="模式：拍照" />
 
+    <!-- 錄影中計時提示，預設隱藏 -->
+    <TextView
+        android:id="@+id/recordingTimerText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="#CCD32F2F"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="6dp"
+        android:text="● 00:00"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="@id/previewView"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="16dp" />
+
     <!-- 即時 GPS 資訊，顯示於預覽右下角：地址／經緯度／自訂文字／時間 -->
     <TextView
         android:id="@+id/gpsOverlayText"

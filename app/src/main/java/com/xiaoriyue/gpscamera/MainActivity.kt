@@ -57,6 +57,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var previewView: PreviewView
     private lateinit var gpsOverlayText: TextView
+    private lateinit var recordingTimerText: TextView
     private lateinit var modeToggleButton: Button
     private lateinit var captureButton: Button
     private lateinit var brightnessSeekBar: SeekBar
@@ -67,6 +68,7 @@ class MainActivity : AppCompatActivity() {
     private var camera: Camera? = null
     private var isVideoMode = false
     private var isRecording = false
+    private var recordingStartTimeMs = 0L
 
     private lateinit var cameraExecutor: ExecutorService
 
@@ -81,6 +83,17 @@ class MainActivity : AppCompatActivity() {
     private val clockTicker = object : Runnable {
         override fun run() {
             updateOverlayText()
+            mainHandler.postDelayed(this, 1000)
+        }
+    }
+
+    // 錄影中，每秒更新已錄影秒數
+    private val recordingTicker = object : Runnable {
+        override fun run() {
+            val elapsedSec = (System.currentTimeMillis() - recordingStartTimeMs) / 1000
+            val minutes = elapsedSec / 60
+            val seconds = elapsedSec % 60
+            recordingTimerText.text = "● %02d:%02d".format(minutes, seconds)
             mainHandler.postDelayed(this, 1000)
         }
     }
@@ -118,7 +131,10 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         previewView = findViewById(R.id.previewView)
+        // 使用 COMPATIBLE（TextureView）模式，確保 GPS 疊字在錄影模式下也一定會顯示在預覽畫面最上層
+        previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         gpsOverlayText = findViewById(R.id.gpsOverlayText)
+        recordingTimerText = findViewById(R.id.recordingTimerText)
         captureButton = findViewById(R.id.captureButton)
         modeToggleButton = findViewById(R.id.modeToggleButton)
         brightnessSeekBar = findViewById(R.id.brightnessSeekBar)
@@ -516,6 +532,10 @@ class MainActivity : AppCompatActivity() {
                     is VideoRecordEvent.Start -> {
                         isRecording = true
                         captureButton.text = "停止錄影"
+                        recordingStartTimeMs = System.currentTimeMillis()
+                        recordingTimerText.text = "● 00:00"
+                        recordingTimerText.visibility = android.view.View.VISIBLE
+                        mainHandler.post(recordingTicker)
                         if (startLocation != null) {
                             LocationLogger.append(
                                 this, "[影片開始] $startTime",
@@ -527,6 +547,8 @@ class MainActivity : AppCompatActivity() {
                     is VideoRecordEvent.Finalize -> {
                         isRecording = false
                         captureButton.text = "開始錄影"
+                        mainHandler.removeCallbacks(recordingTicker)
+                        recordingTimerText.visibility = android.view.View.GONE
                         if (event.hasError()) {
                             Toast.makeText(this, "錄影發生錯誤：${event.error}", Toast.LENGTH_LONG).show()
                         } else {
@@ -554,6 +576,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         mainHandler.removeCallbacks(clockTicker)
+        mainHandler.removeCallbacks(recordingTicker)
         fusedLocationClient.removeLocationUpdates(locationCallback)
         activeRecording?.stop()
         cameraExecutor.shutdown()
