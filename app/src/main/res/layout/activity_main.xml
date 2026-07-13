@@ -26,12 +26,16 @@
 
         <Button
             android:id="@+id/galleryButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             style="@style/OverlayButton"
             android:layout_marginEnd="8dp"
             android:text="相簿" />
 
         <Button
             android:id="@+id/settingsButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             style="@style/OverlayButton"
             android:text="設定" />
 
@@ -40,6 +44,8 @@
     <!-- 左上角：拍照／錄影模式切換 -->
     <Button
         android:id="@+id/modeToggleButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         style="@style/OverlayButton"
         app:layout_constraintTop_toTopOf="@id/previewView"
         app:layout_constraintStart_toStartOf="@id/previewView"
