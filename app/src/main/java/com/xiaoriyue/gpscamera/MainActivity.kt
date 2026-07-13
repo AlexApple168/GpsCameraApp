@@ -69,6 +69,9 @@ class MainActivity : AppCompatActivity() {
     private var isVideoMode = false
     private var isRecording = false
     private var recordingStartTimeMs = 0L
+    private var currentCameraSelector: CameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+    private var selectedLensId: String? = null
+    private lateinit var lensSwitchBar: android.widget.LinearLayout
 
     private lateinit var cameraExecutor: ExecutorService
 
@@ -113,6 +116,7 @@ class MainActivity : AppCompatActivity() {
         val locationGranted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true
 
         if (cameraGranted) {
+            setupLensOptions()
             startCamera()
         } else {
             Toast.makeText(this, "需要相機權限才能使用本 App", Toast.LENGTH_LONG).show()
@@ -138,6 +142,7 @@ class MainActivity : AppCompatActivity() {
         captureButton = findViewById(R.id.captureButton)
         modeToggleButton = findViewById(R.id.modeToggleButton)
         brightnessSeekBar = findViewById(R.id.brightnessSeekBar)
+        lensSwitchBar = findViewById(R.id.lensSwitchBar)
         val settingsButton = findViewById<Button>(R.id.settingsButton)
         val galleryButton = findViewById<Button>(R.id.galleryButton)
 
@@ -181,6 +186,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (needed.isEmpty()) {
+            setupLensOptions()
             startCamera()
             startLocationUpdates()
         } else {
@@ -210,7 +216,7 @@ class MainActivity : AppCompatActivity() {
             val preview = Preview.Builder().build().also {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
-            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+            val cameraSelector = currentCameraSelector
 
             try {
                 cameraProvider.unbindAll()
@@ -234,6 +240,59 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "相機啟動失敗：${e.message}", Toast.LENGTH_LONG).show()
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    // ---------- 鏡頭切換 ----------
+
+    private fun setupLensOptions() {
+        val options = CameraLensHelper.detectLensOptions(this)
+        if (options.isEmpty()) return
+
+        if (selectedLensId == null || options.none { it.id == selectedLensId }) {
+            val default = options.firstOrNull { it.label == "標準" } ?: options.first()
+            selectedLensId = default.id
+            currentCameraSelector = CameraLensHelper.selectorForCameraId(default.id)
+        }
+
+        renderLensButtons(options)
+    }
+
+    private fun renderLensButtons(options: List<CameraLensHelper.LensOption>) {
+        lensSwitchBar.removeAllViews()
+        for (option in options) {
+            val button = Button(this)
+            button.text = option.label
+            button.textSize = 12f
+            button.setPadding(28, 8, 28, 8)
+            button.setTextColor(Color.WHITE)
+            button.setAllCaps(false)
+            button.minWidth = 0
+            button.minimumWidth = 0
+            val isSelected = option.id == selectedLensId
+            button.setBackgroundColor(Color.parseColor(if (isSelected) "#4285F4" else "#333333"))
+
+            val params = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            params.marginEnd = 12
+            button.layoutParams = params
+
+            button.setOnClickListener {
+                if (isRecording) {
+                    Toast.makeText(this, "請先停止錄影再切換鏡頭", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                if (selectedLensId != option.id) {
+                    selectedLensId = option.id
+                    currentCameraSelector = CameraLensHelper.selectorForCameraId(option.id)
+                    renderLensButtons(options)
+                    startCamera()
+                }
+            }
+
+            lensSwitchBar.addView(button)
+        }
     }
 
     // ---------- 亮度（曝光補償）調整 ----------
