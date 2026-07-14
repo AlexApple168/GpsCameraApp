@@ -349,7 +349,7 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         // Step 3: 如果有旋轉，把浮水印 bitmap 轉回原始感測器方向
         if (rotation == 0) return displayBmp
 
-        val matrix = Matrix()
+        val matrix = android.graphics.Matrix()
         // 播放器會順時針轉 rotation 度，所以浮水印要先逆時針轉 rotation 度回去
         matrix.postRotate(-rotation.toFloat(), dispW / 2f, dispH / 2f)
         val rawBmp = Bitmap.createBitmap(displayBmp, 0, 0, dispW, dispH, matrix, true)
