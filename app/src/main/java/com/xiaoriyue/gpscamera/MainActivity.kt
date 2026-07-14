@@ -31,6 +31,7 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
@@ -47,6 +48,7 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -566,22 +568,15 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val filename = "GPS_${System.currentTimeMillis()}.mp4"
-        val contentValues = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, filename)
-            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/GpsCamera")
-            }
-        }
-
-        val outputOptions = MediaStoreOutputOptions.Builder(
-            contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-        ).setContentValues(contentValues).build()
+        // 先錄到暫存檔，結束後再加浮水印
+        val tempFile = File(cacheDir, "temp_video_${System.currentTimeMillis()}.mp4")
+        val outputOptions = FileOutputOptions.Builder(tempFile).build()
 
         val startLocation = lastLocation
         val startAddress = lastAddress
         val startTime = timeFormat.format(Date())
+        val startCustomText = Prefs.getCustomText(this)
+        val startShowLatLon = Prefs.getShowLatLon(this)
 
         activeRecording = capture.output
             .prepareRecording(this, outputOptions)
@@ -609,6 +604,7 @@ class MainActivity : AppCompatActivity() {
                         mainHandler.removeCallbacks(recordingTicker)
                         recordingTimerText.visibility = android.view.View.GONE
                         if (event.hasError()) {
+                            tempFile.delete()
                             Toast.makeText(this, "錄影發生錯誤：${event.error}", Toast.LENGTH_LONG).show()
                         } else {
                             val endTime = timeFormat.format(Date())
@@ -619,7 +615,30 @@ class MainActivity : AppCompatActivity() {
                                     endLocation.latitude, endLocation.longitude, lastAddress
                                 )
                             }
-                            Toast.makeText(this, "影片已儲存至相簿", Toast.LENGTH_SHORT).show()
+
+                            // 組合浮水印文字
+                            val watermarkLines = mutableListOf(startAddress)
+                            if (startShowLatLon && startLocation != null) {
+                                watermarkLines.add("%.6f, %.6f".format(
+                                    startLocation.latitude, startLocation.longitude))
+                            }
+                            if (startCustomText.isNotBlank()) {
+                                watermarkLines.add(startCustomText)
+                            }
+                            watermarkLines.add(startTime)
+
+                            Toast.makeText(this, "正在加入 GPS 浮水印⋯", Toast.LENGTH_SHORT).show()
+
+                            VideoWatermarker(this).processAsync(tempFile, watermarkLines) { savedUri ->
+                                tempFile.delete()
+                                mainHandler.post {
+                                    if (savedUri != null) {
+                                        Toast.makeText(this, "影片已儲存至相簿", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(this, "影片儲存失敗", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            }
                         }
                     }
                     else -> Unit
