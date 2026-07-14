@@ -52,9 +52,21 @@ uniform sampler2D sTexture;
 void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
     }
 
+    /** 影片用：標準貼圖座標（OES texture 由 stMatrix 處理翻轉） */
     private val quadBuf: FloatBuffer = ByteBuffer.allocateDirect(16 * 4)
         .order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
             put(floatArrayOf(-1f,-1f,0f,0f, 1f,-1f,1f,0f, -1f,1f,0f,1f, 1f,1f,1f,1f))
+            position(0)
+        }
+
+    /**
+     * 浮水印用：Y 軸翻轉的貼圖座標。
+     * Bitmap 的原點在左上角，OpenGL 貼圖原點在左下角，
+     * 所以 2D texture 需要翻轉 Y 才不會上下顛倒。
+     */
+    private val wmQuadBuf: FloatBuffer = ByteBuffer.allocateDirect(16 * 4)
+        .order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
+            put(floatArrayOf(-1f,-1f,0f,1f, 1f,-1f,1f,1f, -1f,1f,0f,0f, 1f,1f,1f,0f))
             position(0)
         }
 
@@ -90,7 +102,12 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
 
         val rawW = vidFmt.getInteger(MediaFormat.KEY_WIDTH)
         val rawH = vidFmt.getInteger(MediaFormat.KEY_HEIGHT)
-        val rotation = try { vidFmt.getInteger(MediaFormat.KEY_ROTATION) } catch (_: Exception) { 0 }
+
+        // MediaExtractor 的 track format 常常讀不到 KEY_ROTATION（回傳 0），
+        // 改用 MediaMetadataRetriever 讀取容器層的 rotation metadata，這個才可靠
+        val rotation = readRotation(inputFile)
+        Log.i(TAG, "影片尺寸=${rawW}x${rawH}, rotation=$rotation")
+
         val br = try { vidFmt.getInteger(MediaFormat.KEY_BIT_RATE) } catch (_: Exception) { maxOf(rawW * rawH * 2, 2_000_000) }
         val fps = try { vidFmt.getInteger(MediaFormat.KEY_FRAME_RATE) } catch (_: Exception) { 30 }
 
@@ -209,12 +226,12 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
                         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
                         // 畫影片幀（直接用 SurfaceTexture 變換，不做額外旋轉）
-                        drawQuad(progExt, oesTex, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, stMatrix)
+                        drawQuad(progExt, oesTex, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, stMatrix, quadBuf)
 
-                        // 畫浮水印（已在 makeWatermarkBitmap 中處理好旋轉）
+                        // 畫浮水印（用 Y 翻轉的貼圖座標，修正 Bitmap 與 GL 原點差異）
                         GLES20.glEnable(GLES20.GL_BLEND)
                         GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
-                        drawQuad(prog2D, wmTex, GLES20.GL_TEXTURE_2D, identityMatrix)
+                        drawQuad(prog2D, wmTex, GLES20.GL_TEXTURE_2D, identityMatrix, wmQuadBuf)
                         GLES20.glDisable(GLES20.GL_BLEND)
 
                         EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurf, pts * 1000)
@@ -279,6 +296,21 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         return uri
     }
 
+    /** 用 MediaMetadataRetriever 讀取影片的 rotation metadata（比 MediaExtractor 可靠） */
+    private fun readRotation(file: File): Int {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                ?.toIntOrNull() ?: 0
+        } catch (e: Exception) {
+            Log.w(TAG, "讀取 rotation 失敗，預設為 0", e)
+            0
+        } finally {
+            try { retriever.release() } catch (_: Exception) {}
+        }
+    }
+
     // ── GL 輔助方法 ──
 
     private fun makeProgram(vsSrc: String, fsSrc: String): Int {
@@ -304,7 +336,7 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         return shader
     }
 
-    private fun drawQuad(program: Int, texId: Int, texTarget: Int, matrix: FloatArray) {
+    private fun drawQuad(program: Int, texId: Int, texTarget: Int, matrix: FloatArray, buf: FloatBuffer) {
         GLES20.glUseProgram(program)
         val posLoc = GLES20.glGetAttribLocation(program, "aPosition")
         val texLoc = GLES20.glGetAttribLocation(program, "aTexCoord")
@@ -312,13 +344,13 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
 
         GLES20.glUniformMatrix4fv(matLoc, 1, false, matrix, 0)
 
-        quadBuf.position(0)
+        buf.position(0)
         GLES20.glEnableVertexAttribArray(posLoc)
-        GLES20.glVertexAttribPointer(posLoc, 2, GLES20.GL_FLOAT, false, 16, quadBuf)
+        GLES20.glVertexAttribPointer(posLoc, 2, GLES20.GL_FLOAT, false, 16, buf)
 
-        quadBuf.position(2)
+        buf.position(2)
         GLES20.glEnableVertexAttribArray(texLoc)
-        GLES20.glVertexAttribPointer(texLoc, 2, GLES20.GL_FLOAT, false, 16, quadBuf)
+        GLES20.glVertexAttribPointer(texLoc, 2, GLES20.GL_FLOAT, false, 16, buf)
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(texTarget, texId)
