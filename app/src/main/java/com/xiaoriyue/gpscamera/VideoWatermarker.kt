@@ -49,11 +49,9 @@ uniform sampler2D sTexture;
 void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
     }
 
-    private val quadBuf: FloatBuffer = ByteBuffer.allocateDirect(16 * 4)
-        .order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
-            put(floatArrayOf(-1f, -1f, 0f, 0f, 1f, -1f, 1f, 0f, -1f, 1f, 0f, 1f, 1f, 1f, 1f, 1f))
-            position(0)
-        }
+    /** 標準四邊形（浮水印用，不旋轉） */
+    private val standardQuadBuf: FloatBuffer = makeQuadBuf(
+        floatArrayOf(-1f,-1f,0f,0f, 1f,-1f,1f,0f, -1f,1f,0f,1f, 1f,1f,1f,1f))
 
     private val identityMatrix = FloatArray(16).also { android.opengl.Matrix.setIdentityM(it, 0) }
     private val syncObj = Object()
@@ -140,9 +138,8 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         st.setOnFrameAvailableListener { synchronized(syncObj) { frameAvailable = true; syncObj.notifyAll() } }
         val decSurface = Surface(st)
 
-        // ── 旋轉矩陣：SurfaceTexture 變換 + 手動旋轉 ──
-        // 讓輸出影片已經是正確方向，不再需要 rotation metadata
-        val rotMatrix = FloatArray(16)
+        // ── 根據旋轉角度建立影片幀專用的 quad（貼圖座標已含旋轉）──
+        val videoQuadBuf = makeRotatedQuadBuf(rotation)
 
         // ── 浮水印 Texture ──
         val wmTex = texIds[1]
@@ -202,22 +199,21 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
                         }
                         st.updateTexImage()
 
-                        // 組合 SurfaceTexture 變換 + 旋轉
+                        // 取得 SurfaceTexture 的變換矩陣（處理 Y 翻轉等）
                         val stMatrix = FloatArray(16)
                         st.getTransformMatrix(stMatrix)
-                        buildRotatedMatrix(rotMatrix, stMatrix, rotation)
 
                         GLES20.glViewport(0, 0, outW, outH)
                         GLES20.glClearColor(0f, 0f, 0f, 1f)
                         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-                        // 畫影片幀（帶旋轉）
-                        drawQuad(progExt, oesTex, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, rotMatrix)
+                        // 畫影片幀（旋轉已包含在 videoQuadBuf 的貼圖座標中）
+                        drawQuad(progExt, oesTex, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, stMatrix, videoQuadBuf)
 
                         // 畫浮水印（不旋轉，已是正確方向）
                         GLES20.glEnable(GLES20.GL_BLEND)
                         GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
-                        drawQuad(prog2D, wmTex, GLES20.GL_TEXTURE_2D, identityMatrix)
+                        drawQuad(prog2D, wmTex, GLES20.GL_TEXTURE_2D, identityMatrix, standardQuadBuf)
                         GLES20.glDisable(GLES20.GL_BLEND)
 
                         EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurf, pts * 1000)
@@ -282,19 +278,71 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         return uri
     }
 
-    // ── 旋轉矩陣組合：SurfaceTexture 變換 + 手動旋轉 ──
-    private fun buildRotatedMatrix(out: FloatArray, stMatrix: FloatArray, rotation: Int) {
-        if (rotation == 0) {
-            System.arraycopy(stMatrix, 0, out, 0, 16)
-            return
+    // ── 旋轉處理：用不同的貼圖座標來旋轉影片畫面 ──
+
+    private fun makeQuadBuf(data: FloatArray): FloatBuffer =
+        ByteBuffer.allocateDirect(data.size * 4)
+            .order(ByteOrder.nativeOrder()).asFloatBuffer().apply { put(data); position(0) }
+
+    /**
+     * 依據 rotation metadata 建立影片幀的 quad buffer。
+     * 每個頂點 = (vx, vy, tx, ty)，其中 vx/vy 是螢幕位置，tx/ty 是貼圖座標。
+     * 旋轉是透過重新對應貼圖座標來實現的，不用矩陣運算，避免方向搞錯。
+     *
+     * 原理：解碼器輸出的畫面是感測器原始方向（橫向），
+     * rotation 表示「播放器要順時針轉多少度才能正確顯示」。
+     * 我們在貼圖座標上做相同的重新對應，讓輸出直接是正確方向。
+     *
+     * 四個頂點對應的螢幕位置固定為：
+     *   BL(-1,-1)  BR(1,-1)  TL(-1,1)  TR(1,1)
+     *
+     * 標準貼圖座標（rotation=0）：
+     *   BL→(0,0)  BR→(1,0)  TL→(0,1)  TR→(1,1)
+     *
+     * rotation=90 (直拍，要順時針轉 90°)：
+     *   輸出的 BL 應顯示原始畫面的 BL，即 tex(0,0) 對應到哪裡？
+     *   想像原始橫向畫面順時針轉 90° 後變成直向：
+     *     顯示的 BL ← 原始的 BL = (0,0)   ... 不對
+     *
+     *   更直覺的方式：直接列出對應關係
+     *   rotation=90 表示順時針 90°，即原始畫面的：
+     *     左邊 → 顯示的上方、右邊 → 顯示的下方
+     *     上方 → 顯示的右邊、下方 → 顯示的左邊
+     *   所以：
+     *     輸出 BL(-1,-1) ← 原始右下 = tex(1,0)
+     *     輸出 BR(1,-1)  ← 原始右上 = tex(1,1)
+     *     輸出 TL(-1,1)  ← 原始左下 = tex(0,0)
+     *     輸出 TR(1,1)   ← 原始左上 = tex(0,1)
+     */
+    private fun makeRotatedQuadBuf(rotation: Int): FloatBuffer {
+        val data = when (rotation) {
+            90 -> floatArrayOf(
+                // vx,  vy,  tx, ty
+                -1f, -1f,  1f, 0f,   // BL ← 原始右下
+                 1f, -1f,  1f, 1f,   // BR ← 原始右上
+                -1f,  1f,  0f, 0f,   // TL ← 原始左下
+                 1f,  1f,  0f, 1f    // TR ← 原始左上
+            )
+            180 -> floatArrayOf(
+                -1f, -1f,  1f, 1f,
+                 1f, -1f,  0f, 1f,
+                -1f,  1f,  1f, 0f,
+                 1f,  1f,  0f, 0f
+            )
+            270 -> floatArrayOf(
+                -1f, -1f,  0f, 1f,
+                 1f, -1f,  0f, 0f,
+                -1f,  1f,  1f, 1f,
+                 1f,  1f,  1f, 0f
+            )
+            else -> floatArrayOf(
+                -1f, -1f,  0f, 0f,
+                 1f, -1f,  1f, 0f,
+                -1f,  1f,  0f, 1f,
+                 1f,  1f,  1f, 1f
+            )
         }
-        // 在 texture 座標空間中（0~1），圍繞中心 (0.5, 0.5) 旋轉
-        val rot = FloatArray(16)
-        android.opengl.Matrix.setIdentityM(rot, 0)
-        android.opengl.Matrix.translateM(rot, 0, 0.5f, 0.5f, 0f)
-        android.opengl.Matrix.rotateM(rot, 0, -rotation.toFloat(), 0f, 0f, 1f)
-        android.opengl.Matrix.translateM(rot, 0, -0.5f, -0.5f, 0f)
-        android.opengl.Matrix.multiplyMM(out, 0, rot, 0, stMatrix, 0)
+        return makeQuadBuf(data)
     }
 
     // ── GL 輔助方法 ──
@@ -322,7 +370,7 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         return shader
     }
 
-    private fun drawQuad(program: Int, texId: Int, texTarget: Int, matrix: FloatArray) {
+    private fun drawQuad(program: Int, texId: Int, texTarget: Int, matrix: FloatArray, buf: FloatBuffer) {
         GLES20.glUseProgram(program)
 
         val posLoc = GLES20.glGetAttribLocation(program, "aPosition")
@@ -331,13 +379,13 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
 
         GLES20.glUniformMatrix4fv(matLoc, 1, false, matrix, 0)
 
-        quadBuf.position(0)
+        buf.position(0)
         GLES20.glEnableVertexAttribArray(posLoc)
-        GLES20.glVertexAttribPointer(posLoc, 2, GLES20.GL_FLOAT, false, 16, quadBuf)
+        GLES20.glVertexAttribPointer(posLoc, 2, GLES20.GL_FLOAT, false, 16, buf)
 
-        quadBuf.position(2)
+        buf.position(2)
         GLES20.glEnableVertexAttribArray(texLoc)
-        GLES20.glVertexAttribPointer(texLoc, 2, GLES20.GL_FLOAT, false, 16, quadBuf)
+        GLES20.glVertexAttribPointer(texLoc, 2, GLES20.GL_FLOAT, false, 16, buf)
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(texTarget, texId)
