@@ -17,8 +17,11 @@ import java.nio.FloatBuffer
 
 /**
  * 影片浮水印處理器。
- * 流程：解碼原始影片 → OpenGL 疊加 GPS 浮水印 → 重新編碼 → 存入相簿。
- * 若處理失敗會自動退回儲存原始影片。
+ *
+ * 策略：
+ * - 影片保持原始感測器方向（不在 GL 做旋轉），用 orientationHint 讓播放器轉
+ * - 浮水印先在「正確顯示方向」畫好（底部右下角），再用 Bitmap 旋轉回原始方向
+ * - 這樣 SurfaceTexture 的變換矩陣可以直接套用，不需要跟旋轉矩陣做運算
  */
 class VideoWatermarker(private val context: Context) {
 
@@ -49,9 +52,11 @@ uniform sampler2D sTexture;
 void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
     }
 
-    /** 標準四邊形（浮水印用，不旋轉） */
-    private val standardQuadBuf: FloatBuffer = makeQuadBuf(
-        floatArrayOf(-1f,-1f,0f,0f, 1f,-1f,1f,0f, -1f,1f,0f,1f, 1f,1f,1f,1f))
+    private val quadBuf: FloatBuffer = ByteBuffer.allocateDirect(16 * 4)
+        .order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
+            put(floatArrayOf(-1f,-1f,0f,0f, 1f,-1f,1f,0f, -1f,1f,0f,1f, 1f,1f,1f,1f))
+            position(0)
+        }
 
     private val identityMatrix = FloatArray(16).also { android.opengl.Matrix.setIdentityM(it, 0) }
     private val syncObj = Object()
@@ -89,9 +94,9 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         val br = try { vidFmt.getInteger(MediaFormat.KEY_BIT_RATE) } catch (_: Exception) { maxOf(rawW * rawH * 2, 2_000_000) }
         val fps = try { vidFmt.getInteger(MediaFormat.KEY_FRAME_RATE) } catch (_: Exception) { 30 }
 
-        // 考慮旋轉後的實際顯示尺寸
-        val outW = if (rotation == 90 || rotation == 270) rawH else rawW
-        val outH = if (rotation == 90 || rotation == 270) rawW else rawH
+        // 不做尺寸交換，輸出跟原始感測器一樣的尺寸
+        val outW = rawW
+        val outH = rawH
 
         // ── Encoder ──
         val encFmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, outW, outH).apply {
@@ -138,12 +143,9 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         st.setOnFrameAvailableListener { synchronized(syncObj) { frameAvailable = true; syncObj.notifyAll() } }
         val decSurface = Surface(st)
 
-        // ── 根據旋轉角度建立影片幀專用的 quad（貼圖座標已含旋轉）──
-        val videoQuadBuf = makeRotatedQuadBuf(rotation)
-
         // ── 浮水印 Texture ──
         val wmTex = texIds[1]
-        val wmBmp = makeWatermarkBitmap(outW, outH, lines)
+        val wmBmp = makeWatermarkBitmap(rawW, rawH, lines, rotation)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, wmTex)
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
@@ -155,10 +157,10 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         decoder.configure(vidFmt, decSurface, null, 0)
         decoder.start()
 
-        // ── Muxer ──
+        // ── Muxer（設定 orientationHint 讓播放器處理旋轉）──
         val outFile = File(context.cacheDir, "wm_${System.currentTimeMillis()}.mp4")
         val muxer = MediaMuxer(outFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        // 不設 orientationHint，因為輸出的影片已經旋轉到正確方向
+        if (rotation != 0) muxer.setOrientationHint(rotation)
         var muxVidTrk = -1; var muxAudTrk = -1; var muxStarted = false
 
         extractor.selectTrack(vidIdx)
@@ -199,7 +201,6 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
                         }
                         st.updateTexImage()
 
-                        // 取得 SurfaceTexture 的變換矩陣（處理 Y 翻轉等）
                         val stMatrix = FloatArray(16)
                         st.getTransformMatrix(stMatrix)
 
@@ -207,13 +208,13 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
                         GLES20.glClearColor(0f, 0f, 0f, 1f)
                         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-                        // 畫影片幀（旋轉已包含在 videoQuadBuf 的貼圖座標中）
-                        drawQuad(progExt, oesTex, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, stMatrix, videoQuadBuf)
+                        // 畫影片幀（直接用 SurfaceTexture 變換，不做額外旋轉）
+                        drawQuad(progExt, oesTex, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, stMatrix)
 
-                        // 畫浮水印（不旋轉，已是正確方向）
+                        // 畫浮水印（已在 makeWatermarkBitmap 中處理好旋轉）
                         GLES20.glEnable(GLES20.GL_BLEND)
                         GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
-                        drawQuad(prog2D, wmTex, GLES20.GL_TEXTURE_2D, identityMatrix, standardQuadBuf)
+                        drawQuad(prog2D, wmTex, GLES20.GL_TEXTURE_2D, identityMatrix)
                         GLES20.glDisable(GLES20.GL_BLEND)
 
                         EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurf, pts * 1000)
@@ -241,7 +242,7 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
             }
         }
 
-        // ── 音軌直接複製（不重新編碼）──
+        // ── 音軌直接複製 ──
         if (audIdx >= 0 && muxAudTrk >= 0 && muxStarted) {
             extractor.unselectTrack(vidIdx)
             extractor.selectTrack(audIdx)
@@ -278,73 +279,6 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         return uri
     }
 
-    // ── 旋轉處理：用不同的貼圖座標來旋轉影片畫面 ──
-
-    private fun makeQuadBuf(data: FloatArray): FloatBuffer =
-        ByteBuffer.allocateDirect(data.size * 4)
-            .order(ByteOrder.nativeOrder()).asFloatBuffer().apply { put(data); position(0) }
-
-    /**
-     * 依據 rotation metadata 建立影片幀的 quad buffer。
-     * 每個頂點 = (vx, vy, tx, ty)，其中 vx/vy 是螢幕位置，tx/ty 是貼圖座標。
-     * 旋轉是透過重新對應貼圖座標來實現的，不用矩陣運算，避免方向搞錯。
-     *
-     * 原理：解碼器輸出的畫面是感測器原始方向（橫向），
-     * rotation 表示「播放器要順時針轉多少度才能正確顯示」。
-     * 我們在貼圖座標上做相同的重新對應，讓輸出直接是正確方向。
-     *
-     * 四個頂點對應的螢幕位置固定為：
-     *   BL(-1,-1)  BR(1,-1)  TL(-1,1)  TR(1,1)
-     *
-     * 標準貼圖座標（rotation=0）：
-     *   BL→(0,0)  BR→(1,0)  TL→(0,1)  TR→(1,1)
-     *
-     * rotation=90 (直拍，要順時針轉 90°)：
-     *   輸出的 BL 應顯示原始畫面的 BL，即 tex(0,0) 對應到哪裡？
-     *   想像原始橫向畫面順時針轉 90° 後變成直向：
-     *     顯示的 BL ← 原始的 BL = (0,0)   ... 不對
-     *
-     *   更直覺的方式：直接列出對應關係
-     *   rotation=90 表示順時針 90°，即原始畫面的：
-     *     左邊 → 顯示的上方、右邊 → 顯示的下方
-     *     上方 → 顯示的右邊、下方 → 顯示的左邊
-     *   所以：
-     *     輸出 BL(-1,-1) ← 原始右下 = tex(1,0)
-     *     輸出 BR(1,-1)  ← 原始右上 = tex(1,1)
-     *     輸出 TL(-1,1)  ← 原始左下 = tex(0,0)
-     *     輸出 TR(1,1)   ← 原始左上 = tex(0,1)
-     */
-    private fun makeRotatedQuadBuf(rotation: Int): FloatBuffer {
-        val data = when (rotation) {
-            90 -> floatArrayOf(
-                // vx,  vy,  tx, ty
-                -1f, -1f,  1f, 0f,   // BL ← 原始右下
-                 1f, -1f,  1f, 1f,   // BR ← 原始右上
-                -1f,  1f,  0f, 0f,   // TL ← 原始左下
-                 1f,  1f,  0f, 1f    // TR ← 原始左上
-            )
-            180 -> floatArrayOf(
-                -1f, -1f,  1f, 1f,
-                 1f, -1f,  0f, 1f,
-                -1f,  1f,  1f, 0f,
-                 1f,  1f,  0f, 0f
-            )
-            270 -> floatArrayOf(
-                -1f, -1f,  0f, 1f,
-                 1f, -1f,  0f, 0f,
-                -1f,  1f,  1f, 1f,
-                 1f,  1f,  1f, 0f
-            )
-            else -> floatArrayOf(
-                -1f, -1f,  0f, 0f,
-                 1f, -1f,  1f, 0f,
-                -1f,  1f,  0f, 1f,
-                 1f,  1f,  1f, 1f
-            )
-        }
-        return makeQuadBuf(data)
-    }
-
     // ── GL 輔助方法 ──
 
     private fun makeProgram(vsSrc: String, fsSrc: String): Int {
@@ -370,39 +304,67 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         return shader
     }
 
-    private fun drawQuad(program: Int, texId: Int, texTarget: Int, matrix: FloatArray, buf: FloatBuffer) {
+    private fun drawQuad(program: Int, texId: Int, texTarget: Int, matrix: FloatArray) {
         GLES20.glUseProgram(program)
-
         val posLoc = GLES20.glGetAttribLocation(program, "aPosition")
         val texLoc = GLES20.glGetAttribLocation(program, "aTexCoord")
         val matLoc = GLES20.glGetUniformLocation(program, "uSTMatrix")
 
         GLES20.glUniformMatrix4fv(matLoc, 1, false, matrix, 0)
 
-        buf.position(0)
+        quadBuf.position(0)
         GLES20.glEnableVertexAttribArray(posLoc)
-        GLES20.glVertexAttribPointer(posLoc, 2, GLES20.GL_FLOAT, false, 16, buf)
+        GLES20.glVertexAttribPointer(posLoc, 2, GLES20.GL_FLOAT, false, 16, quadBuf)
 
-        buf.position(2)
+        quadBuf.position(2)
         GLES20.glEnableVertexAttribArray(texLoc)
-        GLES20.glVertexAttribPointer(texLoc, 2, GLES20.GL_FLOAT, false, 16, buf)
+        GLES20.glVertexAttribPointer(texLoc, 2, GLES20.GL_FLOAT, false, 16, quadBuf)
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(texTarget, texId)
         GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "sTexture"), 0)
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-
         GLES20.glDisableVertexAttribArray(posLoc)
         GLES20.glDisableVertexAttribArray(texLoc)
     }
 
     // ── 浮水印 Bitmap ──
 
-    private fun makeWatermarkBitmap(w: Int, h: Int, lines: List<String>): Bitmap {
-        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bmp)
+    /**
+     * 先在「正確顯示方向」（直式畫面）畫好浮水印，
+     * 再用 Bitmap 旋轉回原始感測器方向，這樣跟影片疊合後，
+     * 播放器套用 rotation metadata 時浮水印就會出現在正確位置。
+     */
+    private fun makeWatermarkBitmap(rawW: Int, rawH: Int, lines: List<String>, rotation: Int): Bitmap {
+        // Step 1: 計算顯示方向的尺寸
+        val dispW = if (rotation == 90 || rotation == 270) rawH else rawW
+        val dispH = if (rotation == 90 || rotation == 270) rawW else rawH
 
+        // Step 2: 在顯示方向畫浮水印（右下角）
+        val displayBmp = Bitmap.createBitmap(dispW, dispH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(displayBmp)
+        drawWatermarkOnCanvas(canvas, dispW, dispH, lines)
+
+        // Step 3: 如果有旋轉，把浮水印 bitmap 轉回原始感測器方向
+        if (rotation == 0) return displayBmp
+
+        val matrix = Matrix()
+        // 播放器會順時針轉 rotation 度，所以浮水印要先逆時針轉 rotation 度回去
+        matrix.postRotate(-rotation.toFloat(), dispW / 2f, dispH / 2f)
+        val rawBmp = Bitmap.createBitmap(displayBmp, 0, 0, dispW, dispH, matrix, true)
+        displayBmp.recycle()
+
+        // createBitmap 回傳的尺寸可能因旋轉而不同，縮放到精確的 rawW × rawH
+        if (rawBmp.width != rawW || rawBmp.height != rawH) {
+            val scaled = Bitmap.createScaledBitmap(rawBmp, rawW, rawH, true)
+            rawBmp.recycle()
+            return scaled
+        }
+        return rawBmp
+    }
+
+    private fun drawWatermarkOnCanvas(canvas: Canvas, w: Int, h: Int, lines: List<String>) {
         val textSize = w * 0.028f
         val padding = w * 0.02f
         val lineHeight = textSize * 1.3f
@@ -415,6 +377,7 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
             textAlign = Paint.Align.RIGHT
         }
 
+        // 自動換行
         val allLines = mutableListOf<String>()
         for (line in lines) {
             val maxW = w - padding * 2
@@ -441,7 +404,6 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
             canvas.drawText(line, w - padding, y, textPaint)
             y += lineHeight
         }
-        return bmp
     }
 
     // ── 存入相簿 ──
