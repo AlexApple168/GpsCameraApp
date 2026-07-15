@@ -179,7 +179,11 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         // ── Muxer（設定 orientationHint 讓播放器處理旋轉）──
         val outFile = File(context.cacheDir, "wm_${System.currentTimeMillis()}.mp4")
         val muxer = MediaMuxer(outFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        if (rotation != 0) muxer.setOrientationHint(rotation)
+        // MediaMuxer.setOrientationHint 的旋轉方向跟 MediaMetadataRetriever 讀到的
+        // rotation 方向剛好相反，實測需要用互補角度（360-rotation）才會正確
+        val orientationHint = if (rotation != 0) (360 - rotation) % 360 else 0
+        if (orientationHint != 0) muxer.setOrientationHint(orientationHint)
+        AppLog.log(context, "設定 orientationHint=$orientationHint（原始 rotation=$rotation）")
         var muxVidTrk = -1; var muxAudTrk = -1; var muxStarted = false
 
         extractor.selectTrack(vidIdx)
@@ -294,7 +298,7 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         encSurface.release(); extractor.release()
 
         val uri = saveToMediaStore(outFile)
-        AppLog.log(context, "影片處理完成：輸出 ${outW}x${outH}，orientationHint=$rotation，${if (uri != null) "已存入相簿" else "儲存失敗"}")
+        AppLog.log(context, "影片處理完成：輸出 ${outW}x${outH}，orientationHint=$orientationHint，${if (uri != null) "已存入相簿" else "儲存失敗"}")
         outFile.delete()
         return uri
     }
