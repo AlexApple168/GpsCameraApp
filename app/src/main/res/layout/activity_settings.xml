@@ -94,7 +94,55 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="清除紀錄"
+            android:layout_marginBottom="24dp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#DDDDDD"
+            android:layout_marginBottom="16dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="診斷紀錄"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="拍照、錄影與影片處理的過程紀錄，遇到問題時可提供給開發者參考"
+            android:textSize="12sp"
+            android:textColor="#888888"
+            android:layout_marginBottom="8dp" />
+
+        <TextView
+            android:id="@+id/debugLogText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="尚無紀錄"
+            android:textSize="11sp"
+            android:textColor="#333333"
+            android:background="#F5F5F5"
+            android:fontFamily="monospace"
+            android:padding="12dp"
             android:layout_marginBottom="12dp" />
+
+        <Button
+            android:id="@+id/copyLogButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="複製診斷紀錄"
+            android:layout_marginBottom="8dp" />
+
+        <Button
+            android:id="@+id/clearLogButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="清除診斷紀錄"
+            android:layout_marginBottom="24dp" />
 
         <Button
             android:id="@+id/backButton"

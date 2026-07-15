@@ -80,6 +80,7 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
                 doProcess(inputFile, lines)
             } catch (e: Exception) {
                 Log.e(TAG, "浮水印處理失敗，儲存原始影片", e)
+                AppLog.log(context, "影片浮水印失敗（改存原始影片）：${e.javaClass.simpleName} - ${e.message}")
                 saveToMediaStore(inputFile)
             }
             onDone(uri)
@@ -107,6 +108,7 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         // 改用 MediaMetadataRetriever 讀取容器層的 rotation metadata，這個才可靠
         val rotation = readRotation(inputFile)
         Log.i(TAG, "影片尺寸=${rawW}x${rawH}, rotation=$rotation")
+        AppLog.log(context, "影片處理開始：原始尺寸 ${rawW}x${rawH}，rotation=$rotation")
 
         val br = try { vidFmt.getInteger(MediaFormat.KEY_BIT_RATE) } catch (_: Exception) { maxOf(rawW * rawH * 2, 2_000_000) }
         val fps = try { vidFmt.getInteger(MediaFormat.KEY_FRAME_RATE) } catch (_: Exception) { 30 }
@@ -292,6 +294,7 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         encSurface.release(); extractor.release()
 
         val uri = saveToMediaStore(outFile)
+        AppLog.log(context, "影片處理完成：輸出 ${outW}x${outH}，orientationHint=$rotation，${if (uri != null) "已存入相簿" else "儲存失敗"}")
         outFile.delete()
         return uri
     }

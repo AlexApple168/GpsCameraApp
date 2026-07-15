@@ -412,6 +412,9 @@ class MainActivity : AppCompatActivity() {
                     customText = captureCustomText
                 )
                 saveBitmapToGallery(watermarked)
+                AppLog.log(this@MainActivity,
+                    "拍照完成：${watermarked.width}x${watermarked.height}，" +
+                    (if (captureLocation != null) "GPS已定位" else "GPS未定位"))
 
                 if (captureLocation != null) {
                     LocationLogger.append(
@@ -426,6 +429,7 @@ class MainActivity : AppCompatActivity() {
 
             override fun onError(exception: ImageCaptureException) {
                 Log.e(TAG, "拍照失敗", exception)
+                AppLog.log(this@MainActivity, "拍照失敗：${exception.message}")
                 mainHandler.post {
                     Toast.makeText(this@MainActivity, "拍照失敗：${exception.message}", Toast.LENGTH_LONG).show()
                 }
@@ -605,6 +609,7 @@ class MainActivity : AppCompatActivity() {
                         recordingTimerText.visibility = android.view.View.GONE
                         if (event.hasError()) {
                             tempFile.delete()
+                            AppLog.log(this, "錄影錯誤：code=${event.error}")
                             Toast.makeText(this, "錄影發生錯誤：${event.error}", Toast.LENGTH_LONG).show()
                         } else {
                             val endTime = timeFormat.format(Date())
