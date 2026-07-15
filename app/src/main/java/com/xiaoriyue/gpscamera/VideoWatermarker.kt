@@ -181,8 +181,10 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         val muxer = MediaMuxer(outFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
         // MediaMuxer.setOrientationHint 的旋轉方向跟 MediaMetadataRetriever 讀到的
         // rotation 方向剛好相反，實測需要用互補角度（360-rotation）才會正確
-        val orientationHint = if (rotation != 0) (360 - rotation) % 360 else 0
-        if (orientationHint != 0) muxer.setOrientationHint(orientationHint)
+		val orientationHint = rotation
+		if (orientationHint != 0) {
+			muxer.setOrientationHint(orientationHint)
+		}
         AppLog.log(context, "設定 orientationHint=$orientationHint（原始 rotation=$rotation）")
         var muxVidTrk = -1; var muxAudTrk = -1; var muxStarted = false
 
