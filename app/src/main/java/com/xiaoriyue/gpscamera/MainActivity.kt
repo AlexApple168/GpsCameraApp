@@ -63,7 +63,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recordingTimerText: TextView
     private lateinit var modeToggleButton: Button
     private lateinit var captureButton: Button
-    private lateinit var brightnessSeekBar: SeekBar
+    private lateinit var brightnessMenuButton: Button
+    private var currentBrightnessProgress: Int = 50
     private lateinit var bottomBar: android.widget.LinearLayout
 
     private var imageCapture: ImageCapture? = null
@@ -151,7 +152,7 @@ class MainActivity : AppCompatActivity() {
         recordingTimerText = findViewById(R.id.recordingTimerText)
         captureButton = findViewById(R.id.captureButton)
         modeToggleButton = findViewById(R.id.modeToggleButton)
-        brightnessSeekBar = findViewById(R.id.brightnessSeekBar)
+        brightnessMenuButton = findViewById(R.id.brightnessMenuButton)
         lensMenuButton = findViewById(R.id.lensMenuButton)
         aspectRatioMenuButton = findViewById(R.id.aspectRatioMenuButton)
         bottomBar = findViewById(R.id.bottomBar)
@@ -171,7 +172,7 @@ class MainActivity : AppCompatActivity() {
         modeToggleButton.setOnClickListener { toggleMode() }
         lensMenuButton.setOnClickListener { showLensMenu() }
         aspectRatioMenuButton.setOnClickListener { showAspectRatioMenu() }
-        setupBrightnessSlider()
+        brightnessMenuButton.setOnClickListener { showBrightnessMenu() }
 
         // 手機直立拍攝時，預設用 9:16 比例（貼近全螢幕直式畫面）
         selectedAspectLabel = "9:16"
@@ -265,7 +266,7 @@ class MainActivity : AppCompatActivity() {
                     cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture)
                 }
 
-                applyBrightness(brightnessSeekBar.progress)
+                applyBrightness(currentBrightnessProgress)
             } catch (e: Exception) {
                 Log.e(TAG, "相機綁定失敗", e)
                 Toast.makeText(this, "相機啟動失敗：${e.message}", Toast.LENGTH_LONG).show()
@@ -372,14 +373,60 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- 亮度（曝光補償）調整 ----------
 
-    private fun setupBrightnessSlider() {
-        brightnessSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+    /** 按下「亮度」按鈕時，彈出一個帶滑桿的小視窗 */
+    private fun showBrightnessMenu() {
+        val padding = (16 * resources.displayMetrics.density).toInt()
+
+        val container = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            setPadding(padding, padding, padding, padding)
+            setBackgroundColor(Color.parseColor("#EE222222"))
+        }
+
+        val label = TextView(this).apply {
+            text = "亮度"
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            setPadding(0, 0, padding, 0)
+        }
+
+        val seekBar = SeekBar(this).apply {
+            max = 100
+            progress = currentBrightnessProgress
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                (220 * resources.displayMetrics.density).toInt(),
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        container.addView(label)
+        container.addView(seekBar)
+
+        val popupWindow = android.widget.PopupWindow(
+            container,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            true
+        )
+
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (fromUser) applyBrightness(progress)
+                if (fromUser) {
+                    currentBrightnessProgress = progress
+                    applyBrightness(progress)
+                }
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
+
+        popupWindow.isOutsideTouchable = true
+        container.measure(
+            android.view.View.MeasureSpec.UNSPECIFIED,
+            android.view.View.MeasureSpec.UNSPECIFIED
+        )
+        val popupHeight = container.measuredHeight
+        popupWindow.showAsDropDown(brightnessMenuButton, 0, -(brightnessMenuButton.height + popupHeight))
     }
 
     /** progress: 0~100，對應相機支援的曝光補償範圍（50 為預設中間值） */
