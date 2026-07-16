@@ -19,6 +19,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.util.Log
+import android.util.TypedValue
 import android.widget.Button
 import android.widget.SeekBar
 import android.widget.TextView
@@ -74,6 +75,10 @@ class MainActivity : AppCompatActivity() {
     private var currentCameraSelector: CameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
     private var selectedLensId: String? = null
     private lateinit var lensSwitchBar: android.widget.LinearLayout
+    private lateinit var aspectRatioBar: android.widget.LinearLayout
+    private lateinit var aspectRatioScrollView: android.widget.HorizontalScrollView
+    private var currentPhotoAspectRatio: Float? = null
+    private var selectedAspectLabel: String? = null
 
     private lateinit var cameraExecutor: ExecutorService
 
@@ -145,6 +150,8 @@ class MainActivity : AppCompatActivity() {
         modeToggleButton = findViewById(R.id.modeToggleButton)
         brightnessSeekBar = findViewById(R.id.brightnessSeekBar)
         lensSwitchBar = findViewById(R.id.lensSwitchBar)
+        aspectRatioBar = findViewById(R.id.aspectRatioBar)
+        aspectRatioScrollView = findViewById(R.id.aspectRatioScrollView)
         val settingsButton = findViewById<Button>(R.id.settingsButton)
         val galleryButton = findViewById<Button>(R.id.galleryButton)
 
@@ -160,6 +167,16 @@ class MainActivity : AppCompatActivity() {
         }
         modeToggleButton.setOnClickListener { toggleMode() }
         setupBrightnessSlider()
+        setupAspectRatioOptions()
+
+        // 讓即時預覽的 GPS 文字大小跟照片/影片燒錄時一致（都是畫面寬度的 2.8%），
+        // 避免預覽看起來字很大，但實際存檔後字卻很小
+        previewView.post {
+            val sizePx = previewView.width * 0.028f
+            if (sizePx > 0f) {
+                gpsOverlayText.setTextSize(TypedValue.COMPLEX_UNIT_PX, sizePx)
+            }
+        }
 
         requestNeededPermissions()
     }
@@ -206,6 +223,11 @@ class MainActivity : AppCompatActivity() {
         isVideoMode = !isVideoMode
         modeToggleButton.text = if (isVideoMode) "模式：錄影" else "模式：拍照"
         captureButton.text = if (isVideoMode) "開始錄影" else "拍照"
+
+        // 畫面比例目前只用在拍照，錄影模式下隱藏選單並還原預覽為原始比例
+        aspectRatioScrollView.visibility = if (isVideoMode) android.view.View.GONE else android.view.View.VISIBLE
+        applyPreviewAspectRatio(if (isVideoMode) null else selectedAspectLabel)
+
         startCamera()
     }
 
@@ -242,6 +264,75 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "相機啟動失敗：${e.message}", Toast.LENGTH_LONG).show()
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    // ---------- 畫面比例 ----------
+
+    /** 標籤與「寬:高」比例值，依使用者指定的字面比例直接呈現 */
+    private val aspectRatioOptions = listOf(
+        "1:1" to 1f / 1f,
+        "4:3" to 4f / 3f,
+        "3:2" to 3f / 2f,
+        "16:9" to 16f / 9f,
+        "9:16" to 9f / 16f
+    )
+
+    private fun setupAspectRatioOptions() {
+        aspectRatioBar.removeAllViews()
+        for ((label, ratio) in aspectRatioOptions) {
+            val button = Button(this)
+            button.text = label
+            button.textSize = 12f
+            button.setPadding(28, 8, 28, 8)
+            button.setTextColor(Color.WHITE)
+            button.setAllCaps(false)
+            button.minWidth = 0
+            button.minimumWidth = 0
+
+            val params = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            params.marginEnd = 12
+            button.layoutParams = params
+
+            button.setOnClickListener {
+                if (selectedAspectLabel == label) {
+                    // 再次點選同一個比例，還原成相機原始比例
+                    selectedAspectLabel = null
+                    currentPhotoAspectRatio = null
+                } else {
+                    selectedAspectLabel = label
+                    currentPhotoAspectRatio = ratio
+                }
+                refreshAspectRatioButtonStyles()
+                if (!isVideoMode) applyPreviewAspectRatio(selectedAspectLabel)
+            }
+
+            aspectRatioBar.addView(button)
+        }
+        refreshAspectRatioButtonStyles()
+    }
+
+    private fun refreshAspectRatioButtonStyles() {
+        for (i in 0 until aspectRatioBar.childCount) {
+            val child = aspectRatioBar.getChildAt(i) as? Button ?: continue
+            val isSelected = child.text.toString() == selectedAspectLabel
+            child.setBackgroundColor(Color.parseColor(if (isSelected) "#4285F4" else "#333333"))
+        }
+    }
+
+    /**
+     * 套用比例到即時預覽畫面。
+     * label 直接就是「寬:高」字串（例如 "4:3"、"9:16"），
+     * ConstraintLayout 的 dimensionRatio 用 "H,寬:高" 表示「高度依寬度與此比例計算」，
+     * 直接沿用標籤字串，不用自己換算，比較不會搞錯方向。
+     */
+    private fun applyPreviewAspectRatio(label: String?) {
+        val params = previewView.layoutParams as? androidx.constraintlayout.widget.ConstraintLayout.LayoutParams
+            ?: return
+        params.dimensionRatio = if (label != null) "H,$label" else null
+        previewView.layoutParams = params
     }
 
     // ---------- 鏡頭切換 ----------
@@ -397,11 +488,16 @@ class MainActivity : AppCompatActivity() {
         val captureTime = timeFormat.format(Date())
         val captureCustomText = Prefs.getCustomText(this)
         val captureShowLatLon = Prefs.getShowLatLon(this)
+        val captureAspectRatio = currentPhotoAspectRatio
 
         capture.takePicture(cameraExecutor, object : ImageCapture.OnImageCapturedCallback() {
             override fun onCaptureSuccess(image: ImageProxy) {
-                val bitmap = imageProxyToBitmap(image)
+                var bitmap = imageProxyToBitmap(image)
                 image.close()
+
+                if (captureAspectRatio != null) {
+                    bitmap = cropToAspectRatio(bitmap, captureAspectRatio)
+                }
 
                 val watermarked = drawGpsWatermark(
                     source = bitmap,
@@ -435,6 +531,22 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+    }
+
+    /** 依指定的「寬:高」比例，從畫面正中央裁切 Bitmap */
+    private fun cropToAspectRatio(source: Bitmap, targetRatio: Float): Bitmap {
+        val sourceRatio = source.width.toFloat() / source.height.toFloat()
+        return if (sourceRatio > targetRatio) {
+            // 原圖比目標「更寬」，裁掉左右
+            val newWidth = (source.height * targetRatio).toInt().coerceAtLeast(1)
+            val x = (source.width - newWidth) / 2
+            Bitmap.createBitmap(source, x, 0, newWidth, source.height)
+        } else {
+            // 原圖比目標「更高」，裁掉上下
+            val newHeight = (source.width / targetRatio).toInt().coerceAtLeast(1)
+            val y = (source.height - newHeight) / 2
+            Bitmap.createBitmap(source, 0, y, source.width, newHeight)
+        }
     }
 
     private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
