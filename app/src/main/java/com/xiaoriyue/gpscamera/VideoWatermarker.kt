@@ -75,10 +75,10 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
     private val syncObj = Object()
     @Volatile private var frameAvailable = false
 
-    fun processAsync(inputFile: File, lines: List<String>, onDone: (Uri?) -> Unit) {
+    fun processAsync(inputFile: File, lines: List<String>, targetAspectRatio: Float?, onDone: (Uri?) -> Unit) {
         Thread {
             val uri = try {
-                doProcess(inputFile, lines)
+                doProcess(inputFile, lines, targetAspectRatio)
             } catch (e: Exception) {
                 Log.e(TAG, "浮水印處理失敗，儲存原始影片", e)
                 AppLog.log(context, "影片浮水印失敗（改存原始影片）：${e.javaClass.simpleName} - ${e.message}")
@@ -88,7 +88,7 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
         }.start()
     }
 
-    private fun doProcess(inputFile: File, lines: List<String>): Uri? {
+    private fun doProcess(inputFile: File, lines: List<String>, targetAspectRatio: Float?): Uri? {
         val extractor = MediaExtractor()
         extractor.setDataSource(inputFile.absolutePath)
 
@@ -112,10 +112,42 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
 
         // 🌟 關鍵修改 1：如果影片有旋轉，直接將輸出的寬高互換（物理上輸出直式影片）
         val isRotated = rotation == 90 || rotation == 270
-        val outW = if (isRotated) rawH else rawW
-        val outH = if (isRotated) rawW else rawH
+        var outW = if (isRotated) rawH else rawW
+        var outH = if (isRotated) rawW else rawH
 
-        AppLog.log(context, "影片處理開始：原始尺寸 ${rawW}x${rawH}，輸出尺寸 ${outW}x${outH}，rotation=$rotation")
+        // 依使用者選擇的畫面比例，從正中央裁切（跟拍照的裁切邏輯一致）。
+        // 用調整貼圖座標範圍的方式裁切，不用額外的 FBO：
+        // 螢幕四個角落的位置不變，只是把取樣範圍縮小到中間那一塊。
+        var videoTexLeft = 0f; var videoTexRight = 1f
+        var videoTexBottom = 0f; var videoTexTop = 1f
+        if (targetAspectRatio != null && targetAspectRatio > 0f) {
+            val nativeRatio = outW.toFloat() / outH.toFloat()
+            if (nativeRatio > targetAspectRatio) {
+                // 原本比較寬，裁掉左右
+                val keepFrac = targetAspectRatio / nativeRatio
+                val newW = (outW * keepFrac).toInt().let { it - (it % 2) }.coerceAtLeast(2)
+                val offsetFrac = (1f - keepFrac) / 2f
+                videoTexLeft = offsetFrac
+                videoTexRight = 1f - offsetFrac
+                outW = newW
+            } else {
+                // 原本比較高，裁掉上下
+                val keepFrac = nativeRatio / targetAspectRatio
+                val newH = (outH * keepFrac).toInt().let { it - (it % 2) }.coerceAtLeast(2)
+                val offsetFrac = (1f - keepFrac) / 2f
+                videoTexBottom = offsetFrac
+                videoTexTop = 1f - offsetFrac
+                outH = newH
+            }
+        }
+        val videoQuadBuf = makeQuadBuf(floatArrayOf(
+            -1f, -1f, videoTexLeft,  videoTexBottom,
+             1f, -1f, videoTexRight, videoTexBottom,
+            -1f,  1f, videoTexLeft,  videoTexTop,
+             1f,  1f, videoTexRight, videoTexTop
+        ))
+
+        AppLog.log(context, "影片處理開始：原始尺寸 ${rawW}x${rawH}，輸出尺寸 ${outW}x${outH}，rotation=$rotation，比例=${targetAspectRatio ?: "原始"}")
 
         // ── Encoder ──
         val encFmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, outW, outH).apply {
@@ -231,7 +263,7 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
                         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
                         // 畫影片幀（stMatrix 會自動幫你把畫面完美旋轉並填滿直式 Viewport）
-                        drawQuad(progExt, oesTex, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, stMatrix, quadBuf)
+                        drawQuad(progExt, oesTex, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, stMatrix, videoQuadBuf)
 
                         // 畫浮水印（此時影片是直的，浮水印也是直接畫在直式的右下角，兩者完美貼合）
                         GLES20.glEnable(GLES20.GL_BLEND)
@@ -316,6 +348,10 @@ void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }"""
     }
 
     // ── GL 輔助方法 ──
+
+    private fun makeQuadBuf(data: FloatArray): FloatBuffer =
+        ByteBuffer.allocateDirect(data.size * 4)
+            .order(ByteOrder.nativeOrder()).asFloatBuffer().apply { put(data); position(0) }
 
     private fun makeProgram(vsSrc: String, fsSrc: String): Int {
         val vs = compileShader(GLES20.GL_VERTEX_SHADER, vsSrc)

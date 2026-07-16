@@ -74,10 +74,11 @@ class MainActivity : AppCompatActivity() {
     private var recordingStartTimeMs = 0L
     private var currentCameraSelector: CameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
     private var selectedLensId: String? = null
-    private lateinit var lensSwitchBar: android.widget.LinearLayout
-    private lateinit var aspectRatioBar: android.widget.LinearLayout
-    private lateinit var aspectRatioScrollView: android.widget.HorizontalScrollView
-    private var currentPhotoAspectRatio: Float? = null
+    private lateinit var lensMenuButton: Button
+    private lateinit var aspectRatioMenuButton: Button
+    private var detectedLensOptions: List<CameraLensHelper.LensOption> = emptyList()
+    /** null 代表使用相機原始比例；套用在拍照與錄影兩種模式 */
+    private var currentAspectRatio: Float? = null
     private var selectedAspectLabel: String? = null
 
     private lateinit var cameraExecutor: ExecutorService
@@ -149,9 +150,8 @@ class MainActivity : AppCompatActivity() {
         captureButton = findViewById(R.id.captureButton)
         modeToggleButton = findViewById(R.id.modeToggleButton)
         brightnessSeekBar = findViewById(R.id.brightnessSeekBar)
-        lensSwitchBar = findViewById(R.id.lensSwitchBar)
-        aspectRatioBar = findViewById(R.id.aspectRatioBar)
-        aspectRatioScrollView = findViewById(R.id.aspectRatioScrollView)
+        lensMenuButton = findViewById(R.id.lensMenuButton)
+        aspectRatioMenuButton = findViewById(R.id.aspectRatioMenuButton)
         val settingsButton = findViewById<Button>(R.id.settingsButton)
         val galleryButton = findViewById<Button>(R.id.galleryButton)
 
@@ -166,8 +166,9 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, GalleryActivity::class.java))
         }
         modeToggleButton.setOnClickListener { toggleMode() }
+        lensMenuButton.setOnClickListener { showLensMenu() }
+        aspectRatioMenuButton.setOnClickListener { showAspectRatioMenu() }
         setupBrightnessSlider()
-        setupAspectRatioOptions()
 
         // 讓即時預覽的 GPS 文字大小跟照片/影片燒錄時一致（都是畫面寬度的 2.8%），
         // 避免預覽看起來字很大，但實際存檔後字卻很小
@@ -224,10 +225,6 @@ class MainActivity : AppCompatActivity() {
         modeToggleButton.text = if (isVideoMode) "模式：錄影" else "模式：拍照"
         captureButton.text = if (isVideoMode) "開始錄影" else "拍照"
 
-        // 畫面比例目前只用在拍照，錄影模式下隱藏選單並還原預覽為原始比例
-        aspectRatioScrollView.visibility = if (isVideoMode) android.view.View.GONE else android.view.View.VISIBLE
-        applyPreviewAspectRatio(if (isVideoMode) null else selectedAspectLabel)
-
         startCamera()
     }
 
@@ -277,49 +274,27 @@ class MainActivity : AppCompatActivity() {
         "9:16" to 9f / 16f
     )
 
-    private fun setupAspectRatioOptions() {
-        aspectRatioBar.removeAllViews()
-        for ((label, ratio) in aspectRatioOptions) {
-            val button = Button(this)
-            button.text = label
-            button.textSize = 12f
-            button.setPadding(28, 8, 28, 8)
-            button.setTextColor(Color.WHITE)
-            button.setAllCaps(false)
-            button.minWidth = 0
-            button.minimumWidth = 0
-
-            val params = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            params.marginEnd = 12
-            button.layoutParams = params
-
-            button.setOnClickListener {
-                if (selectedAspectLabel == label) {
-                    // 再次點選同一個比例，還原成相機原始比例
-                    selectedAspectLabel = null
-                    currentPhotoAspectRatio = null
-                } else {
-                    selectedAspectLabel = label
-                    currentPhotoAspectRatio = ratio
-                }
-                refreshAspectRatioButtonStyles()
-                if (!isVideoMode) applyPreviewAspectRatio(selectedAspectLabel)
+    private fun showAspectRatioMenu() {
+        val popup = android.widget.PopupMenu(this, aspectRatioMenuButton)
+        popup.menu.add(0, 0, 0, "原始")
+        aspectRatioOptions.forEachIndexed { index, pair ->
+            popup.menu.add(0, index + 1, index + 1, pair.first)
+        }
+        popup.setOnMenuItemClickListener { item ->
+            if (item.itemId == 0) {
+                selectedAspectLabel = null
+                currentAspectRatio = null
+                aspectRatioMenuButton.text = "比例：原始"
+            } else {
+                val (label, ratio) = aspectRatioOptions[item.itemId - 1]
+                selectedAspectLabel = label
+                currentAspectRatio = ratio
+                aspectRatioMenuButton.text = "比例：$label"
             }
-
-            aspectRatioBar.addView(button)
+            applyPreviewAspectRatio(selectedAspectLabel)
+            true
         }
-        refreshAspectRatioButtonStyles()
-    }
-
-    private fun refreshAspectRatioButtonStyles() {
-        for (i in 0 until aspectRatioBar.childCount) {
-            val child = aspectRatioBar.getChildAt(i) as? Button ?: continue
-            val isSelected = child.text.toString() == selectedAspectLabel
-            child.setBackgroundColor(Color.parseColor(if (isSelected) "#4285F4" else "#333333"))
-        }
+        popup.show()
     }
 
     /**
@@ -340,6 +315,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupLensOptions() {
         val options = CameraLensHelper.detectLensOptions(this)
         if (options.isEmpty()) return
+        detectedLensOptions = options
 
         if (selectedLensId == null || options.none { it.id == selectedLensId }) {
             val default = options.firstOrNull { it.label == "標準" } ?: options.first()
@@ -347,45 +323,31 @@ class MainActivity : AppCompatActivity() {
             currentCameraSelector = CameraLensHelper.selectorForCameraId(default.id)
         }
 
-        renderLensButtons(options)
+        val current = options.first { it.id == selectedLensId }
+        lensMenuButton.text = "鏡頭：${current.label}"
     }
 
-    private fun renderLensButtons(options: List<CameraLensHelper.LensOption>) {
-        lensSwitchBar.removeAllViews()
-        for (option in options) {
-            val button = Button(this)
-            button.text = option.label
-            button.textSize = 12f
-            button.setPadding(28, 8, 28, 8)
-            button.setTextColor(Color.WHITE)
-            button.setAllCaps(false)
-            button.minWidth = 0
-            button.minimumWidth = 0
-            val isSelected = option.id == selectedLensId
-            button.setBackgroundColor(Color.parseColor(if (isSelected) "#4285F4" else "#333333"))
-
-            val params = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            params.marginEnd = 12
-            button.layoutParams = params
-
-            button.setOnClickListener {
-                if (isRecording) {
-                    Toast.makeText(this, "請先停止錄影再切換鏡頭", Toast.LENGTH_SHORT).show()
-                    return@setOnClickListener
-                }
-                if (selectedLensId != option.id) {
-                    selectedLensId = option.id
-                    currentCameraSelector = CameraLensHelper.selectorForCameraId(option.id)
-                    renderLensButtons(options)
-                    startCamera()
-                }
-            }
-
-            lensSwitchBar.addView(button)
+    private fun showLensMenu() {
+        if (detectedLensOptions.isEmpty()) return
+        val popup = android.widget.PopupMenu(this, lensMenuButton)
+        detectedLensOptions.forEachIndexed { index, option ->
+            popup.menu.add(0, index, index, option.label)
         }
+        popup.setOnMenuItemClickListener { item ->
+            if (isRecording) {
+                Toast.makeText(this, "請先停止錄影再切換鏡頭", Toast.LENGTH_SHORT).show()
+                return@setOnMenuItemClickListener true
+            }
+            val option = detectedLensOptions[item.itemId]
+            if (selectedLensId != option.id) {
+                selectedLensId = option.id
+                currentCameraSelector = CameraLensHelper.selectorForCameraId(option.id)
+                lensMenuButton.text = "鏡頭：${option.label}"
+                startCamera()
+            }
+            true
+        }
+        popup.show()
     }
 
     // ---------- 亮度（曝光補償）調整 ----------
@@ -488,7 +450,7 @@ class MainActivity : AppCompatActivity() {
         val captureTime = timeFormat.format(Date())
         val captureCustomText = Prefs.getCustomText(this)
         val captureShowLatLon = Prefs.getShowLatLon(this)
-        val captureAspectRatio = currentPhotoAspectRatio
+        val captureAspectRatio = currentAspectRatio
 
         capture.takePicture(cameraExecutor, object : ImageCapture.OnImageCapturedCallback() {
             override fun onCaptureSuccess(image: ImageProxy) {
@@ -693,6 +655,7 @@ class MainActivity : AppCompatActivity() {
         val startTime = timeFormat.format(Date())
         val startCustomText = Prefs.getCustomText(this)
         val startShowLatLon = Prefs.getShowLatLon(this)
+        val startAspectRatio = currentAspectRatio
 
         activeRecording = capture.output
             .prepareRecording(this, outputOptions)
@@ -746,7 +709,7 @@ class MainActivity : AppCompatActivity() {
 
                             Toast.makeText(this, "正在加入 GPS 浮水印⋯", Toast.LENGTH_SHORT).show()
 
-                            VideoWatermarker(this).processAsync(tempFile, watermarkLines) { savedUri ->
+                            VideoWatermarker(this).processAsync(tempFile, watermarkLines, startAspectRatio) { savedUri ->
                                 tempFile.delete()
                                 mainHandler.post {
                                     if (savedUri != null) {
