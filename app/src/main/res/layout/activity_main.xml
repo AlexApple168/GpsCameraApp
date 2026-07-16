@@ -9,18 +9,19 @@
         android:id="@+id/previewView"
         android:layout_width="0dp"
         android:layout_height="0dp"
+        app:layout_constrainedHeight="true"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toTopOf="@id/bottomBar"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!-- 右上角：相簿／設定按鈕 -->
+    <!-- 右上角：相簿／設定按鈕，固定在畫面最上方，不受預覽比例影響 -->
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        app:layout_constraintTop_toTopOf="@id/previewView"
-        app:layout_constraintEnd_toEndOf="@id/previewView"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
         android:layout_marginTop="16dp"
         android:layout_marginEnd="16dp">
 
@@ -41,7 +42,7 @@
 
     </LinearLayout>
 
-    <!-- 錄影中計時提示，預設隱藏 -->
+    <!-- 錄影中計時提示，預設隱藏，固定在畫面最上方 -->
     <TextView
         android:id="@+id/recordingTimerText"
         android:layout_width="wrap_content"
@@ -54,7 +55,7 @@
         android:textSize="13sp"
         android:textStyle="bold"
         android:visibility="gone"
-        app:layout_constraintTop_toTopOf="@id/previewView"
+        app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         android:layout_marginTop="16dp" />
@@ -155,7 +156,7 @@
             <Button
                 android:id="@+id/modeToggleButton"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
+                android:layout_height="match_parent"
                 android:backgroundTint="#333333"
                 android:textColor="#FFFFFF"
                 android:textSize="13sp"

@@ -64,6 +64,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var modeToggleButton: Button
     private lateinit var captureButton: Button
     private lateinit var brightnessSeekBar: SeekBar
+    private lateinit var bottomBar: android.widget.LinearLayout
 
     private var imageCapture: ImageCapture? = null
     private var videoCapture: VideoCapture<Recorder>? = null
@@ -74,6 +75,7 @@ class MainActivity : AppCompatActivity() {
     private var recordingStartTimeMs = 0L
     private var currentCameraSelector: CameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
     private var selectedLensId: String? = null
+    private var isFrontCameraSelected = false
     private lateinit var lensMenuButton: Button
     private lateinit var aspectRatioMenuButton: Button
     private var detectedLensOptions: List<CameraLensHelper.LensOption> = emptyList()
@@ -152,6 +154,7 @@ class MainActivity : AppCompatActivity() {
         brightnessSeekBar = findViewById(R.id.brightnessSeekBar)
         lensMenuButton = findViewById(R.id.lensMenuButton)
         aspectRatioMenuButton = findViewById(R.id.aspectRatioMenuButton)
+        bottomBar = findViewById(R.id.bottomBar)
         val settingsButton = findViewById<Button>(R.id.settingsButton)
         val galleryButton = findViewById<Button>(R.id.galleryButton)
 
@@ -169,6 +172,13 @@ class MainActivity : AppCompatActivity() {
         lensMenuButton.setOnClickListener { showLensMenu() }
         aspectRatioMenuButton.setOnClickListener { showAspectRatioMenu() }
         setupBrightnessSlider()
+
+        // 手機直立拍攝時，預設用 9:16 比例（貼近全螢幕直式畫面）
+        selectedAspectLabel = "9:16"
+        currentAspectRatio = 9f / 16f
+        aspectRatioMenuButton.text = "比例：9:16"
+        applyPreviewAspectRatio(selectedAspectLabel)
+        updateBottomBarAppearance()
 
         // 讓即時預覽的 GPS 文字大小跟照片/影片燒錄時一致（都是畫面寬度的 2.8%），
         // 避免預覽看起來字很大，但實際存檔後字卻很小
@@ -292,9 +302,17 @@ class MainActivity : AppCompatActivity() {
                 aspectRatioMenuButton.text = "比例：$label"
             }
             applyPreviewAspectRatio(selectedAspectLabel)
+            updateBottomBarAppearance()
             true
         }
         popup.show()
+    }
+
+    /** 9:16 幾乎佔滿整個直式畫面，底部按鈕列改成半透明，避免整塊擋住畫面 */
+    private fun updateBottomBarAppearance() {
+        bottomBar.setBackgroundColor(
+            Color.parseColor(if (selectedAspectLabel == "9:16") "#CC111111" else "#FF111111")
+        )
     }
 
     /**
@@ -325,6 +343,7 @@ class MainActivity : AppCompatActivity() {
 
         val current = options.first { it.id == selectedLensId }
         lensMenuButton.text = "鏡頭：${current.label}"
+        isFrontCameraSelected = current.label == "前置"
     }
 
     private fun showLensMenu() {
@@ -343,6 +362,7 @@ class MainActivity : AppCompatActivity() {
                 selectedLensId = option.id
                 currentCameraSelector = CameraLensHelper.selectorForCameraId(option.id)
                 lensMenuButton.text = "鏡頭：${option.label}"
+                isFrontCameraSelected = option.label == "前置"
                 startCamera()
             }
             true
@@ -518,9 +538,15 @@ class MainActivity : AppCompatActivity() {
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
 
         val rotation = image.imageInfo.rotationDegrees
-        if (rotation == 0) return bitmap
+        if (rotation == 0 && !isFrontCameraSelected) return bitmap
 
-        val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
+        // 前鏡頭的即時預覽會自動左右鏡像（符合自然照鏡子的體感），
+        // 但 ImageCapture 拍出來的原始檔案是「未鏡像」的感測器原始畫面，
+        // 這裡額外做一次水平翻轉，讓存檔結果跟預覽看到的一致
+        val matrix = Matrix().apply {
+            postRotate(rotation.toFloat())
+            if (isFrontCameraSelected) postScale(-1f, 1f)
+        }
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
