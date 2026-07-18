@@ -177,7 +177,7 @@ class MainActivity : AppCompatActivity() {
         // 手機直立拍攝時，預設用 9:16 比例（貼近全螢幕直式畫面）
         selectedAspectLabel = "9:16"
         currentAspectRatio = 9f / 16f
-        aspectRatioMenuButton.text = "比例：9:16"
+        aspectRatioMenuButton.text = "比例"
         applyPreviewAspectRatio(selectedAspectLabel)
         updateBottomBarAppearance()
 
@@ -295,12 +295,10 @@ class MainActivity : AppCompatActivity() {
             if (item.itemId == 0) {
                 selectedAspectLabel = null
                 currentAspectRatio = null
-                aspectRatioMenuButton.text = "比例：原始"
             } else {
                 val (label, ratio) = aspectRatioOptions[item.itemId - 1]
                 selectedAspectLabel = label
                 currentAspectRatio = ratio
-                aspectRatioMenuButton.text = "比例：$label"
             }
             applyPreviewAspectRatio(selectedAspectLabel)
             updateBottomBarAppearance()
@@ -343,7 +341,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val current = options.first { it.id == selectedLensId }
-        lensMenuButton.text = "鏡頭：${current.label}"
+        lensMenuButton.text = "鏡頭"
         isFrontCameraSelected = current.label == "前置"
     }
 
@@ -362,7 +360,6 @@ class MainActivity : AppCompatActivity() {
             if (selectedLensId != option.id) {
                 selectedLensId = option.id
                 currentCameraSelector = CameraLensHelper.selectorForCameraId(option.id)
-                lensMenuButton.text = "鏡頭：${option.label}"
                 isFrontCameraSelected = option.label == "前置"
                 startCamera()
             }

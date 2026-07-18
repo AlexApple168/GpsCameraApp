@@ -15,7 +15,7 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!-- 右上角：相簿／設定按鈕，固定在畫面最上方，不受預覽比例影響 -->
+    <!-- 右上角：鏡頭／比例／相簿／設定，固定在畫面最上方，不受預覽比例影響 -->
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -24,6 +24,22 @@
         app:layout_constraintEnd_toEndOf="parent"
         android:layout_marginTop="16dp"
         android:layout_marginEnd="16dp">
+
+        <Button
+            android:id="@+id/lensMenuButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            style="@style/OverlayButton"
+            android:layout_marginEnd="8dp"
+            android:text="鏡頭" />
+
+        <Button
+            android:id="@+id/aspectRatioMenuButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            style="@style/OverlayButton"
+            android:layout_marginEnd="8dp"
+            android:text="比例" />
 
         <Button
             android:id="@+id/galleryButton"
@@ -91,7 +107,7 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <!-- 鏡頭切換／畫面比例／亮度：各一顆按鈕，按下彈出選單 -->
+        <!-- 亮度：按下彈出選單 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -99,32 +115,9 @@
             android:layout_marginBottom="8dp">
 
             <Button
-                android:id="@+id/lensMenuButton"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginEnd="8dp"
-                android:backgroundTint="#333333"
-                android:textColor="#FFFFFF"
-                android:textSize="13sp"
-                android:text="鏡頭：標準" />
-
-            <Button
-                android:id="@+id/aspectRatioMenuButton"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginEnd="8dp"
-                android:backgroundTint="#333333"
-                android:textColor="#FFFFFF"
-                android:textSize="13sp"
-                android:text="比例：原始" />
-
-            <Button
                 android:id="@+id/brightnessMenuButton"
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:backgroundTint="#333333"
                 android:textColor="#FFFFFF"
                 android:textSize="13sp"
